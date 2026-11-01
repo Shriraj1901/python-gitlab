@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from http.client import responses as http_status_texts
 from typing import Any, BinaryIO, cast, TYPE_CHECKING
 from urllib import parse
 
@@ -756,7 +757,7 @@ class Gitlab:
             ):
                 continue
 
-            error_message = result.content
+            error_message: str | bytes = result.content
             try:
                 error_json = result.json()
                 for k in ("message", "error"):
@@ -764,6 +765,13 @@ class Gitlab:
                         error_message = error_json[k]
             except (KeyError, ValueError, TypeError):
                 pass
+
+            if not error_message:
+                # Bodyless responses, such as the ones to HEAD requests, carry
+                # no message: fall back to the HTTP reason phrase.
+                error_message = result.reason or http_status_texts.get(
+                    result.status_code, ""
+                )
 
             if result.status_code == 401:
                 raise gitlab.exceptions.GitlabAuthenticationError(

@@ -1,11 +1,13 @@
 import copy
 import warnings
+from unittest import mock
 
 import pytest
 import requests
 import responses
 
 from gitlab import GitlabHttpError, GitlabList, GitlabParsingError, RedirectError
+from gitlab._backends.requests_backend import RequestsResponse
 from gitlab.const import RETRYABLE_TRANSIENT_ERROR_CODES
 from tests.unit import helpers
 
@@ -911,3 +913,49 @@ def test_delete_request_404(gl):
     with pytest.raises(GitlabHttpError):
         gl.http_delete("/not_there")
     assert responses.assert_call_count(url, 1) is True
+
+
+@responses.activate
+def test_http_request_error_without_body_uses_the_reason_phrase(gl):
+    url = "http://localhost/api/v4/projects/1/repository/files/missing.yaml"
+    responses.add(method=responses.HEAD, url=url, status=404)
+
+    with pytest.raises(GitlabHttpError) as exc:
+        gl.http_request("head", "/projects/1/repository/files/missing.yaml")
+
+    assert exc.value.response_code == 404
+    assert exc.value.error_message == "Not Found"
+    assert exc.value.response_body == b""
+    assert str(exc.value) == "404: Not Found"
+
+
+def test_http_request_error_without_body_or_reason_uses_the_status_text(gl):
+    response = requests.Response()
+    response.status_code = 404
+    response.reason = ""
+    response._content = b""
+    response.url = "http://localhost/api/v4/projects/1"
+    response.request = requests.Request("GET", response.url).prepare()
+    backend_response = RequestsResponse(response)
+
+    with mock.patch.object(gl._backend, "http_request", return_value=backend_response):
+        with pytest.raises(GitlabHttpError) as exc:
+            gl.http_request("get", "/projects/1")
+
+    assert exc.value.error_message == "Not Found"
+
+
+@responses.activate
+def test_http_request_error_message_from_body_is_kept(gl):
+    url = "http://localhost/api/v4/projects/1"
+    responses.add(
+        method=responses.GET,
+        url=url,
+        status=404,
+        json={"message": "404 Project Not Found"},
+    )
+
+    with pytest.raises(GitlabHttpError) as exc:
+        gl.http_request("get", "/projects/1")
+
+    assert exc.value.error_message == "404 Project Not Found"
