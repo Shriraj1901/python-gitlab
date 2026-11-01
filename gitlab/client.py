@@ -711,13 +711,6 @@ class Gitlab:
         if retry_transient_errors is None:
             retry_transient_errors = self.retry_transient_errors
 
-        # We need to deal with json vs. data when uploading files
-        send_data = self._backend.prepare_send_data(files, post_data, raw)
-        opts["headers"]["Content-type"] = send_data.content_type
-
-        if extra_headers is not None:
-            opts["headers"].update(extra_headers)
-
         retry = utils.Retry(
             max_retries=max_retries,
             obey_rate_limit=obey_rate_limit,
@@ -725,6 +718,15 @@ class Gitlab:
         )
 
         while True:
+            # We need to deal with json vs. data when uploading files. This is
+            # done for every attempt: the multipart body is a stream that the
+            # previous attempt has already consumed.
+            send_data = self._backend.prepare_send_data(files, post_data, raw)
+            opts["headers"]["Content-type"] = send_data.content_type
+
+            if extra_headers is not None:
+                opts["headers"].update(extra_headers)
+
             try:
                 result = self._backend.http_request(
                     method=verb,

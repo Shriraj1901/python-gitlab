@@ -1,4 +1,5 @@
 import copy
+import io
 import warnings
 
 import pytest
@@ -911,3 +912,65 @@ def test_delete_request_404(gl):
     with pytest.raises(GitlabHttpError):
         gl.http_delete("/not_there")
     assert responses.assert_call_count(url, 1) is True
+
+
+@responses.activate
+def test_http_post_upload_retry_sends_the_file_again(gl_retry):
+    url = "http://localhost/api/v4/projects/1/uploads"
+    bodies = []
+
+    def request_callback(request):
+        body = request.body
+        bodies.append(body.read() if hasattr(body, "read") else body)
+        if len(bodies) == 1:
+            return (500, {}, "Internal Server Error")
+        return (200, {}, '{"url": "/uploads/abc/test.txt"}')
+
+    responses.add_callback(
+        method=responses.POST,
+        url=url,
+        callback=request_callback,
+        content_type="application/json",
+    )
+
+    result = gl_retry.http_post(
+        "/projects/1/uploads", files={"file": ("test.txt", b"file content")}
+    )
+
+    assert result == {"url": "/uploads/abc/test.txt"}
+    assert len(bodies) == 2
+    assert all(b"file content" in body for body in bodies)
+    boundaries = [
+        call.request.headers["Content-type"].split("boundary=")[1]
+        for call in responses.calls
+    ]
+    assert all(
+        b"--" + boundary.encode() in body for boundary, body in zip(boundaries, bodies)
+    )
+
+
+@responses.activate
+def test_http_post_upload_retry_sends_file_objects_again(gl_retry):
+    url = "http://localhost/api/v4/projects/1/uploads"
+    bodies = []
+
+    def request_callback(request):
+        body = request.body
+        bodies.append(body.read() if hasattr(body, "read") else body)
+        if len(bodies) == 1:
+            return (500, {}, "Internal Server Error")
+        return (200, {}, '{"url": "/uploads/abc/test.txt"}')
+
+    responses.add_callback(
+        method=responses.POST,
+        url=url,
+        callback=request_callback,
+        content_type="application/json",
+    )
+
+    fileobj = io.BytesIO(b"file content")
+
+    gl_retry.http_post("/projects/1/uploads", files={"file": ("test.txt", fileobj)})
+
+    assert len(bodies) == 2
+    assert all(b"file content" in body for body in bodies)
